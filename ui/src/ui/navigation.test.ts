@@ -15,74 +15,107 @@ import {
 /** All valid tab identifiers derived from TAB_GROUPS */
 const ALL_TABS: Tab[] = TAB_GROUPS.flatMap((group) => group.tabs) as Tab[];
 
-describe("iconForTab", () => {
-  it("returns a non-empty string for every tab", () => {
-    for (const tab of ALL_TABS) {
-      const icon = iconForTab(tab);
-      expect(icon).toBeTruthy();
-      expect(typeof icon).toBe("string");
-      expect(icon.length).toBeGreaterThan(0);
-    }
-  });
+const leadingSlashNormalizerCases = [
+  { name: "normalizeBasePath", normalize: normalizeBasePath, input: "ui", expected: "/ui" },
+  { name: "normalizePath", normalize: normalizePath, input: "chat", expected: "/chat" },
+];
 
-  it("returns stable icons for known tabs", () => {
-    expect(iconForTab("chat")).toBe("💬");
-    expect(iconForTab("overview")).toBe("📊");
-    expect(iconForTab("channels")).toBe("🔗");
-    expect(iconForTab("instances")).toBe("📡");
-    expect(iconForTab("sessions")).toBe("📄");
-    expect(iconForTab("cron")).toBe("⏰");
-    expect(iconForTab("skills")).toBe("⚡️");
-    expect(iconForTab("nodes")).toBe("🖥️");
-    expect(iconForTab("config")).toBe("⚙️");
-    expect(iconForTab("debug")).toBe("🐞");
-    expect(iconForTab("logs")).toBe("🧾");
+describe("iconForTab", () => {
+  it("returns stable icons for every tab", () => {
+    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, iconForTab(tab)]))).toEqual({
+      chat: "messageSquare",
+      overview: "barChart",
+      channels: "link",
+      instances: "radio",
+      sessions: "fileText",
+      usage: "barChart",
+      cron: "loader",
+      agents: "folder",
+      skills: "zap",
+      nodes: "monitor",
+      dreams: "moon",
+      config: "settings",
+      communications: "send",
+      appearance: "spark",
+      automation: "terminal",
+      infrastructure: "globe",
+      aiAgents: "brain",
+      debug: "bug",
+      logs: "scrollText",
+    });
   });
 
   it("returns a fallback icon for unknown tab", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownTab = "unknown" as Tab;
-    expect(iconForTab(unknownTab)).toBe("📁");
+    expect(iconForTab(unknownTab)).toBe("folder");
   });
 });
 
 describe("titleForTab", () => {
-  it("returns a non-empty string for every tab", () => {
-    for (const tab of ALL_TABS) {
-      const title = titleForTab(tab);
-      expect(title).toBeTruthy();
-      expect(typeof title).toBe("string");
-    }
-  });
-
-  it("returns expected titles", () => {
-    expect(titleForTab("chat")).toBe("Chat");
-    expect(titleForTab("overview")).toBe("Overview");
-    expect(titleForTab("cron")).toBe("Cron Jobs");
+  it("returns expected titles for every tab", () => {
+    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, titleForTab(tab)]))).toEqual({
+      chat: "Chat",
+      overview: "Overview",
+      channels: "Channels",
+      instances: "Instances",
+      sessions: "Sessions",
+      usage: "Usage",
+      cron: "Cron Jobs",
+      agents: "Agents",
+      skills: "Skills",
+      nodes: "Nodes",
+      dreams: "Dreaming",
+      config: "Config",
+      communications: "Communications",
+      appearance: "Appearance",
+      automation: "Automation",
+      infrastructure: "Infrastructure",
+      aiAgents: "AI & Agents",
+      debug: "Debug",
+      logs: "Logs",
+    });
   });
 });
 
 describe("subtitleForTab", () => {
-  it("returns a string for every tab", () => {
-    for (const tab of ALL_TABS) {
-      const subtitle = subtitleForTab(tab);
-      expect(typeof subtitle).toBe("string");
-    }
+  it("returns expected subtitles for every tab", () => {
+    expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, subtitleForTab(tab)]))).toEqual({
+      chat: "Gateway chat for quick interventions.",
+      overview: "Status, entry points, health.",
+      channels: "Channels and settings.",
+      instances: "Connected clients and nodes.",
+      sessions: "Active sessions and defaults.",
+      usage: "API usage and costs.",
+      cron: "Wakeups and recurring runs.",
+      agents: "Workspaces, tools, identities.",
+      skills: "Skills and API keys.",
+      nodes: "Paired devices and commands.",
+      dreams: "Memory dreaming, consolidation, and reflection.",
+      config: "Edit openclaw.json.",
+      communications: "Channels, messages, and audio settings.",
+      appearance: "Theme, UI, and setup wizard settings.",
+      automation: "Commands, hooks, cron, and plugins.",
+      infrastructure: "Gateway, web, browser, and media settings.",
+      aiAgents: "Agents, models, skills, tools, memory, session.",
+      debug: "Snapshots, events, RPC.",
+      logs: "Live gateway logs.",
+    });
   });
+});
 
-  it("returns descriptive subtitles", () => {
-    expect(subtitleForTab("chat")).toContain("chat session");
-    expect(subtitleForTab("config")).toContain("openclaw.json");
-  });
+describe("leading slash path normalizers", () => {
+  it.each(leadingSlashNormalizerCases)(
+    "$name adds leading slash if missing",
+    ({ expected, input, normalize }) => {
+      expect(normalize(input)).toBe(expected);
+    },
+  );
 });
 
 describe("normalizeBasePath", () => {
   it("returns empty string for falsy input", () => {
     expect(normalizeBasePath("")).toBe("");
-  });
-
-  it("adds leading slash if missing", () => {
-    expect(normalizeBasePath("ui")).toBe("/ui");
   });
 
   it("removes trailing slash", () => {
@@ -101,10 +134,6 @@ describe("normalizeBasePath", () => {
 describe("normalizePath", () => {
   it("returns / for falsy input", () => {
     expect(normalizePath("")).toBe("/");
-  });
-
-  it("adds leading slash if missing", () => {
-    expect(normalizePath("chat")).toBe("/chat");
   });
 
   it("removes trailing slash except for root", () => {
@@ -130,6 +159,8 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/chat")).toBe("chat");
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/sessions")).toBe("sessions");
+    expect(tabFromPath("/dreaming")).toBe("dreams");
+    expect(tabFromPath("/dreams")).toBe("dreams");
   });
 
   it("returns chat for root path", () => {
@@ -159,6 +190,8 @@ describe("inferBasePathFromPathname", () => {
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
+    expect(inferBasePathFromPathname("/dreaming")).toBe("");
+    expect(inferBasePathFromPathname("/dreams")).toBe("");
   });
 
   it("infers base path from nested paths", () => {
@@ -174,11 +207,7 @@ describe("inferBasePathFromPathname", () => {
 
 describe("TAB_GROUPS", () => {
   it("contains all expected groups", () => {
-    const labels = TAB_GROUPS.map((g) => g.label);
-    expect(labels).toContain("Chat");
-    expect(labels).toContain("Control");
-    expect(labels).toContain("Agent");
-    expect(labels).toContain("Settings");
+    expect(TAB_GROUPS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
   });
 
   it("all tabs are unique", () => {

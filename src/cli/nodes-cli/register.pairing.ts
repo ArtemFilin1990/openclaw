@@ -1,10 +1,13 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { getTerminalTableWidth } from "../../terminal/table.js";
+import { formatCliCommand } from "../command-format.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { formatAge, parsePairingList } from "./format.js";
+import { parsePairingList } from "./format.js";
+import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -16,7 +19,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(pending, null, 2));
+            defaultRuntime.writeJson(pending);
             return;
           }
           if (pending.length === 0) {
@@ -25,32 +28,16 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { heading, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
-          const rows = pending.map((r) => ({
-            Request: r.requestId,
-            Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
-            IP: r.remoteIp ?? "",
-            Requested:
-              typeof r.ts === "number"
-                ? `${formatAge(Math.max(0, now - r.ts))} ago`
-                : muted("unknown"),
-            Repair: r.isRepair ? warn("yes") : "",
-          }));
-          defaultRuntime.log(heading("Pending"));
-          defaultRuntime.log(
-            renderTable({
-              width: tableWidth,
-              columns: [
-                { key: "Request", header: "Request", minWidth: 8 },
-                { key: "Node", header: "Node", minWidth: 14, flex: true },
-                { key: "IP", header: "IP", minWidth: 10 },
-                { key: "Requested", header: "Requested", minWidth: 12 },
-                { key: "Repair", header: "Repair", minWidth: 6 },
-              ],
-              rows,
-            }).trimEnd(),
-          );
+          const rendered = renderPendingPairingRequestsTable({
+            pending,
+            now,
+            tableWidth,
+            theme: { heading, warn, muted },
+          });
+          defaultRuntime.log(rendered.heading);
+          defaultRuntime.log(rendered.table);
         });
       }),
   );
@@ -65,7 +52,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.approve", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
   );
@@ -80,7 +67,33 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.reject", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
+        });
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("remove")
+      .description("Remove a paired node entry")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("remove", async () => {
+          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          if (!nodeId) {
+            defaultRuntime.error(
+              `--node is required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node request.`,
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
+          const result = await callGatewayCli("node.pair.remove", opts, { nodeId });
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          const { warn } = getNodesTheme();
+          defaultRuntime.log(warn(`Removed paired node ${nodeId}`));
         });
       }),
   );
@@ -93,10 +106,12 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const name = String(opts.name ?? "").trim();
+          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const name = normalizeOptionalString(opts.name) ?? "";
           if (!nodeId || !name) {
-            defaultRuntime.error("--node and --name required");
+            defaultRuntime.error(
+              `--node and --name are required. Run ${formatCliCommand("openclaw nodes pairing pending")} to choose a node, then rerun with --name <displayName>.`,
+            );
             defaultRuntime.exit(1);
             return;
           }
@@ -105,7 +120,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             displayName: name,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
           const { ok } = getNodesTheme();

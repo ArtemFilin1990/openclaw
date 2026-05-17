@@ -33,6 +33,7 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
+
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }
@@ -50,7 +51,6 @@ struct OpenClawApp: App {
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState)
         }
-        .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
@@ -58,6 +58,7 @@ struct OpenClawApp: App {
             self.installStatusItemMouseHandler(for: item)
             self.updateHoverHUDSuppression()
         }
+        .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused, sleeping: self.isGatewaySleeping)
             if self.state.connectionMode == .local {
@@ -97,15 +98,9 @@ struct OpenClawApp: App {
     private static func applyAttachOnlyOverrideIfNeeded() {
         let args = CommandLine.arguments
         guard args.contains("--attach-only") || args.contains("--no-launchd") else { return }
-        if let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(true) {
+        if let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride() {
             Self.logger.error("attach-only flag failed: \(error, privacy: .public)")
             return
-        }
-        Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: Bundle.main.bundlePath,
-                port: GatewayEnvironment.gatewayPort())
         }
         Self.logger.info("attach-only flag enabled")
     }
@@ -148,7 +143,7 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
@@ -172,14 +167,24 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func toggleWebChatPanel() {
+    private func openDashboardWindow() {
         HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
+        if DashboardManager.shared.showConfiguredWindowIfPossible() {
+            return
+        }
         Task { @MainActor in
-            let sessionKey = await WebChatManager.shared.preferredSessionKey()
-            WebChatManager.shared.togglePanel(
-                sessionKey: sessionKey,
-                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+            if DashboardManager.shared.showConfiguredWindowIfPossible() {
+                return
+            }
+            do {
+                try await DashboardManager.shared.show()
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Dashboard unavailable"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
         }
     }
 
@@ -227,17 +232,7 @@ private final class StatusItemMouseHandlerView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let tracking {
-            self.removeTrackingArea(tracking)
-        }
-        let options: NSTrackingArea.Options = [
-            .mouseEnteredAndExited,
-            .activeAlways,
-            .inVisibleRect,
-        ]
-        let area = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
-        self.addTrackingArea(area)
-        self.tracking = area
+        TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -298,6 +293,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
+        if CommandLine.arguments.contains("--dashboard") {
+            self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
+            Task { @MainActor in
+                if DashboardManager.shared.showConfiguredWindowIfPossible() {
+                    return
+                }
+                do {
+                    try await DashboardManager.shared.show()
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Dashboard unavailable"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -309,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
+        DashboardManager.shared.close()
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
@@ -318,6 +330,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
+        if AppStateStore.shared.connectionMode != .unconfigured {
+            OnboardingController.markComplete()
+            return
+        }
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
@@ -344,7 +360,7 @@ protocol UpdaterProviding: AnyObject {
     func checkForUpdates(_ sender: Any?)
 }
 
-// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
+/// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
 final class DisabledUpdaterController: UpdaterProviding {
     var automaticallyChecksForUpdates: Bool = false
     var automaticallyDownloadsUpdates: Bool = false
@@ -393,7 +409,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         set { self.controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
 
     func checkForUpdates(_ sender: Any?) {
         self.controller.checkForUpdates(sender)
@@ -428,7 +446,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: @preconcurrency SPUUpdaterDelegate {}
+extension SparkleUpdaterController: SPUUpdaterDelegate {}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?
